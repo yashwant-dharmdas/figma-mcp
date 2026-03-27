@@ -13,7 +13,7 @@ COPY package.json bun.lock ./
 COPY packages/shared/package.json     ./packages/shared/
 COPY packages/mcp-server/package.json ./packages/mcp-server/
 
-RUN bun install --frozen-lockfile --production
+RUN bun install --production
 
 # ── Source files ──────────────────────────────────────────────
 COPY tsconfig.base.json ./

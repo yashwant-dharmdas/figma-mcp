@@ -15,7 +15,7 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/relay/package.json   ./packages/relay/
 
 # Install production deps only (bun-types / vitest not needed at runtime).
-RUN bun install --frozen-lockfile --production
+RUN bun install --production
 
 # ── Source files ──────────────────────────────────────────────
 COPY tsconfig.base.json ./
