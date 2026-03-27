@@ -1,0 +1,57 @@
+# ── Figma MCP — Local Development Compose ────────────────────
+#
+# Runs both services with hot-reload and auth disabled.
+# No secrets required.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up
+#
+# Or run without Docker (faster iteration):
+#   bun run dev
+# ─────────────────────────────────────────────────────────────
+
+services:
+
+  relay:
+    build:
+      context: .
+      dockerfile: packages/relay/Dockerfile
+    ports:
+      - "3055:3055"
+    environment:
+      RELAY_PORT:   "3055"
+      RELAY_HOST:   "0.0.0.0"
+      RELAY_AUTH:   "disabled"   # no HMAC auth in local dev
+      NODE_ENV:     "development"
+    # Mount source for hot-reload (bun --watch sees file changes)
+    volumes:
+      - ./packages/shared/src:/app/packages/shared/src:ro
+      - ./packages/relay/src:/app/packages/relay/src:ro
+    command: ["bun", "run", "--watch", "packages/relay/src/server.ts"]
+    networks:
+      - figma-mcp-local
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: packages/mcp-server/Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      MCP_PORT:     "3001"
+      MCP_HOST:     "0.0.0.0"
+      RELAY_URL:    "ws://relay:3055"
+      RELAY_AUTH:   "disabled"
+      NODE_ENV:     "development"
+    volumes:
+      - ./packages/shared/src:/app/packages/shared/src:ro
+      - ./packages/mcp-server/src:/app/packages/mcp-server/src:ro
+    command: ["bun", "run", "--watch", "packages/mcp-server/src/server.ts"]
+    depends_on:
+      - relay
+    networks:
+      - figma-mcp-local
+
+networks:
+  figma-mcp-local:
+    driver: bridge

@@ -1,0 +1,34 @@
+envVarGroups:
+  - name: figma-mcp-secrets
+    envVars:
+      - key: RELAY_SECRET
+        generateValue: true
+
+services:
+  - type: web
+    name: figma-mcp-relay
+    runtime: docker
+    dockerfilePath: packages/relay/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: figma-mcp-secrets
+      - key: RELAY_AUTH
+        value: enabled
+      - key: NODE_ENV
+        value: production
+
+  - type: web
+    name: figma-mcp-server
+    runtime: docker
+    dockerfilePath: packages/mcp-server/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: figma-mcp-secrets
+      - key: RELAY_URL
+        value: wss://figma-mcp-relay.onrender.com
+      - key: RELAY_AUTH
+        value: enabled
+      - key: NODE_ENV
+        value: production

@@ -1,0 +1,25 @@
+{
+  "name": "figma-mcp",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Multi-user, server-deployable Figma MCP system",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run --filter '*' build",
+    "test": "bun run --filter '*' test",
+    "test:watch": "bun run --filter '*' test:watch",
+    "relay": "bun run --cwd packages/relay dev",
+    "mcp-server": "bun run --cwd packages/mcp-server dev",
+    "dev": "bun run relay & bun run mcp-server"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1"
+  }
+}

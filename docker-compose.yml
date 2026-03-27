@@ -1,0 +1,70 @@
+# ── Figma MCP — Production Compose ───────────────────────────
+#
+# Usage:
+#   cp .env.example .env          # fill in secrets
+#   docker compose up -d
+#
+# For HTTPS/WSS, place a reverse proxy (nginx / Caddy / Traefik)
+# in front of both services and set RELAY_URL on the MCP server.
+# The plugin's UI should point to wss://<your-domain>:3055.
+# ─────────────────────────────────────────────────────────────
+
+services:
+
+  relay:
+    build:
+      context: .
+      dockerfile: packages/relay/Dockerfile
+    image: figma-mcp-relay:latest
+    restart: unless-stopped
+    ports:
+      - "${RELAY_PORT:-3055}:${RELAY_PORT:-3055}"
+    environment:
+      RELAY_PORT:   ${RELAY_PORT:-3055}
+      RELAY_HOST:   "0.0.0.0"
+      RELAY_SECRET: ${RELAY_SECRET}          # required — set in .env
+      RELAY_AUTH:   ${RELAY_AUTH:-enabled}
+      # TLS (optional — use a reverse proxy instead when possible)
+      # TLS_CERT_PATH: /certs/fullchain.pem
+      # TLS_KEY_PATH:  /certs/privkey.pem
+    # volumes:
+    #   - /etc/letsencrypt/live/<domain>:/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${RELAY_PORT:-3055}/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - figma-mcp
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: packages/mcp-server/Dockerfile
+    image: figma-mcp-server:latest
+    restart: unless-stopped
+    ports:
+      - "${MCP_PORT:-3001}:${MCP_PORT:-3001}"
+    environment:
+      MCP_PORT:     ${MCP_PORT:-3001}
+      MCP_HOST:     "0.0.0.0"
+      # Internal relay URL — uses Docker network, not the public one
+      RELAY_URL:    "ws://relay:${RELAY_PORT:-3055}"
+      RELAY_SECRET: ${RELAY_SECRET}          # must match relay's secret
+      FIGMA_TOKEN:  ${FIGMA_TOKEN:-}         # optional — Figma REST API
+    depends_on:
+      relay:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${MCP_PORT:-3001}/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - figma-mcp
+
+networks:
+  figma-mcp:
+    driver: bridge
