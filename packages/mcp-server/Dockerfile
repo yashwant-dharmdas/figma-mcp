@@ -13,7 +13,7 @@ COPY package.json bun.lock ./
 COPY packages/shared/package.json     ./packages/shared/
 COPY packages/mcp-server/package.json ./packages/mcp-server/
 
-RUN bun install --production
+RUN bun install
 
 # ── Source files ──────────────────────────────────────────────
 COPY tsconfig.base.json ./
