@@ -84,7 +84,7 @@ export class ToolFactory {
           const cached = this.sessionStore.cache.get(def.name, args);
           if (cached !== undefined) {
             return {
-              content: [{ type: "text" as const, text: JSON.stringify(cached) }],
+              content: [{ type: "text" as const, text: JSON.stringify(cached ?? null) }],
             };
           }
         }
@@ -117,7 +117,7 @@ export class ToolFactory {
 
           return {
             content: [
-              { type: "text" as const, text: JSON.stringify(result) },
+              { type: "text" as const, text: JSON.stringify(result ?? null) },
             ],
           };
         } catch (err) {

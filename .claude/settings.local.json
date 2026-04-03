@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun install:*)",
+      "Bash(bun run:*)",
+      "mcp__b9304474-ea0c-4112-b72c-91e7cf0da7e5__get_document_info",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(curl -s https://figma-mcp-server-d81s.onrender.com/health)"
+    ]
+  }
+}

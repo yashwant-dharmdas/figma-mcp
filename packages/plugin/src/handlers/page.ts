@@ -13,7 +13,7 @@ export function registerPageHandlers(dispatcher: Dispatcher): void {
     return figma.root.children.map((p) => ({
       id: p.id,
       name: p.name,
-      childCount: p.children.length,
+      childCount: ("children" in p) ? p.children.length : 0,
       isCurrent: p.id === figma.currentPage.id,
     }));
   });

@@ -242,7 +242,7 @@ export function registerCreationHandlers(dispatcher: Dispatcher): void {
     }
 
     const group = node as GroupNode;
-    const childCount = group.children.length;
+    const childCount = ("children" in group) ? group.children.length : 0;
     figma.ungroup(group);
 
     return { ungroupedCount: childCount };
