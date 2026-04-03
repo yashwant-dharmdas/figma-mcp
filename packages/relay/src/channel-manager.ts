@@ -207,13 +207,13 @@ export class ChannelManager {
       return;
     }
 
-    // Broadcast to ALL clients in the channel (including sender)
+    // Broadcast to other clients in the channel (exclude sender)
     // The plugin receives commands; the MCP server receives responses
     this.broadcast(channel, {
       type: "broadcast",
       channel: channelId,
       message: data["message"],
-    }, null);
+    }, ws);
   }
 
   private handleProgress(ws: WS, data: Record<string, unknown>): void {

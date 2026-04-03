@@ -294,13 +294,17 @@ export class RelayClient {
         if (id) {
           const pending = this.pending.get(id);
           if (pending) {
-            clearTimeout(pending.timer);
-            this.pending.delete(id);
-            const error = msgObj["error"] as string | undefined;
-            if (error) {
-              pending.reject(new Error(error));
-            } else {
-              pending.resolve(msgObj["result"]);
+            // Only resolve if this is actually a response (has result or error).
+            // Command requests (which don't have these) are ignored.
+            if ("result" in msgObj || "error" in msgObj) {
+              clearTimeout(pending.timer);
+              this.pending.delete(id);
+              const error = msgObj["error"] as string | undefined;
+              if (error) {
+                pending.reject(new Error(error));
+              } else {
+                pending.resolve(msgObj["result"]);
+              }
             }
           }
         }
