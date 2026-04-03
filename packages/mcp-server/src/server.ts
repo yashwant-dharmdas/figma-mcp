@@ -27,11 +27,13 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { COMMAND_REGISTRY } from "@figma-mcp/shared";
 import { SessionStore } from "./session-store.js";
 import { ToolFactory } from "./tool-factory.js";
+import { RelayClient } from "./relay-client.js";
 
 // ── Config ───────────────────────────────────────────────────
 
 const MCP_PORT = Number(process.env["PORT"] ?? process.env["MCP_PORT"] ?? 3001);
 const MCP_HOST = process.env["MCP_HOST"] ?? "0.0.0.0";
+const RELAY_URL = process.env["RELAY_URL"] ?? "ws://localhost:3055";
 
 // ── Session registry ─────────────────────────────────────────
 
@@ -76,6 +78,16 @@ function createSession(): { entry: SessionEntry; sessionId: string } {
   const entry: SessionEntry = { transport, sessionStore };
   // Store before connect so onsessioninitialized can log correctly.
   sessions.set(sessionId, entry);
+
+  // Eagerly pre-connect the relay WebSocket so join_channel is fast.
+  const relayClient = new RelayClient(RELAY_URL);
+  sessionStore.setRelayClient(relayClient);
+  void relayClient.connect().then(() => {
+    relayClient.startKeepalive();
+    console.log(`[mcp-server] Relay pre-connected for session ${sessionId.slice(0, 8)}`);
+  }).catch((err: unknown) => {
+    console.warn(`[mcp-server] Relay pre-connect failed for session ${sessionId.slice(0, 8)}: ${String(err)}`);
+  });
 
   // Connect MCP server to transport (non-blocking; request handled below).
   void mcpServer.connect(transport);

@@ -20,6 +20,7 @@ import { RelayClient } from "../relay-client.js";
 
 const RELAY_URL = process.env["RELAY_URL"] ?? "ws://localhost:3055";
 
+
 export function registerJoinChannel(
   server: McpServer,
   def: CommandDefinition,
@@ -39,13 +40,13 @@ export function registerJoinChannel(
       const channel = args["channel"] as string;
       const token = args["token"] as string | undefined;
 
-      // Disconnect previous relay client if the user calls join_channel again.
-      sessionStore.relayClient?.disconnect();
-
-      const relayClient = new RelayClient(RELAY_URL);
+      // Re-use the pre-connected relay client, or create a new one if missing.
+      const relayClient = sessionStore.relayClient ?? new RelayClient(RELAY_URL);
 
       try {
+        // Returns immediately if already OPEN; waits for connection otherwise.
         await relayClient.connect();
+        relayClient.startKeepalive();
       } catch (err) {
         return {
           isError: true as const,

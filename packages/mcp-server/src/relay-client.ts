@@ -40,6 +40,8 @@ export class RelayClient {
   private _channelId: string | null = null;
   private _progressCallback: ProgressCallback | undefined;
   private _relayUrl: string;
+  private _connectPromise: Promise<void> | null = null;
+  private _keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(relayUrl: string = RELAY_URL) {
     this._relayUrl = relayUrl;
@@ -52,18 +54,24 @@ export class RelayClient {
    * Resolves when the socket is open.
    */
   connect(): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        resolve();
-        return;
-      }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      return Promise.resolve();
+    }
+    if (this._connectPromise) {
+      return this._connectPromise;
+    }
 
+    this._connectPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
       const settle = (err?: Error) => {
         if (settled) return;
         settled = true;
-        if (err) reject(err);
-        else resolve();
+        if (err) {
+          this._connectPromise = null;
+          reject(err);
+        } else {
+          resolve();
+        }
       };
 
       const ws = new WebSocket(this._relayUrl);
@@ -97,9 +105,13 @@ export class RelayClient {
         );
       };
     });
+
+    return this._connectPromise;
   }
 
   disconnect(): void {
+    this.stopKeepalive();
+    this._connectPromise = null;
     if (this.ws) {
       this.ws.onclose = null; // prevent handleClose from running twice
       this.ws.close();
@@ -204,6 +216,27 @@ export class RelayClient {
     this._progressCallback = callback;
   }
 
+  /** Send periodic pings to keep the relay connection alive. */
+  startKeepalive(intervalMs = 30_000): void {
+    this.stopKeepalive();
+    this._keepaliveTimer = setInterval(() => {
+      if (this.isConnected) {
+        try {
+          this.send({ type: "ping", id: randomUUID() });
+        } catch {
+          // ignore — handleClose will clean up
+        }
+      }
+    }, intervalMs);
+  }
+
+  stopKeepalive(): void {
+    if (this._keepaliveTimer !== undefined) {
+      clearInterval(this._keepaliveTimer);
+      this._keepaliveTimer = undefined;
+    }
+  }
+
   // ── Private helpers ──────────────────────────────────────
 
   private send(payload: unknown): void {
@@ -253,7 +286,7 @@ export class RelayClient {
     }
 
     // ── Command response ───────────────────────────────────
-    if (type === "message") {
+    if (type === "message" || type === "broadcast") {
       const message = msg["message"];
       if (message && typeof message === "object" && !Array.isArray(message)) {
         const msgObj = message as Record<string, unknown>;
@@ -301,6 +334,8 @@ export class RelayClient {
 
   private handleClose(): void {
     this.ws = null;
+    this._connectPromise = null;
+    this.stopKeepalive();
     this.rejectAllPending(
       new FigmaMcpError(
         "Relay WebSocket connection closed unexpectedly.",

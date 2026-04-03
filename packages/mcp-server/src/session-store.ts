@@ -60,6 +60,14 @@ export class SessionStore {
   }
 
   /**
+   * Store the eagerly-connected relay client created at session init.
+   * Does NOT disconnect any previous client (there should be none yet).
+   */
+  setRelayClient(client: RelayClient): void {
+    this.state.relayClient = client;
+  }
+
+  /**
    * Called by join_channel after successfully connecting + joining.
    * Disconnects any previous relay client to avoid dangling connections.
    */
