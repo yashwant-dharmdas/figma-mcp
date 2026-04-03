@@ -44,6 +44,33 @@ interface SessionEntry {
 
 const sessions = new Map<string, SessionEntry>();
 
+// ── Relay warm-connection pool ───────────────────────────────
+//
+// Keeps POOL_SIZE fully-connected RelayClient instances ready so that
+// join_channel can reuse an existing connection instead of waiting for a
+// fresh wss:// handshake (which can take 10-15 s through Render's proxy).
+// The pool is refilled automatically after each checkout.
+
+const POOL_SIZE = 3;
+const warmPool: RelayClient[] = [];
+
+function fillWarmPool(): void {
+  const needed = POOL_SIZE - warmPool.length;
+  for (let i = 0; i < needed; i++) {
+    const client = new RelayClient(RELAY_URL);
+    void client.connect().then(() => {
+      client.startKeepalive();
+      warmPool.push(client);
+      console.log(`[mcp-server] Warm relay connection ready (pool=${warmPool.length})`);
+    }).catch((err: unknown) => {
+      console.warn(`[mcp-server] Warm relay connect failed: ${String(err)} — retrying in 5s`);
+      setTimeout(fillWarmPool, 5_000);
+    });
+  }
+}
+
+fillWarmPool(); // Start warming at server startup
+
 // ── Session factory ──────────────────────────────────────────
 
 function createSession(): { entry: SessionEntry; sessionId: string } {
@@ -79,15 +106,20 @@ function createSession(): { entry: SessionEntry; sessionId: string } {
   // Store before connect so onsessioninitialized can log correctly.
   sessions.set(sessionId, entry);
 
-  // Eagerly pre-connect the relay WebSocket so join_channel is fast.
-  const relayClient = new RelayClient(RELAY_URL);
+  // Assign a pre-connected relay client from the warm pool (fast path), or
+  // fall back to creating a fresh one if the pool is empty (slow path).
+  const relayClient = warmPool.shift() ?? new RelayClient(RELAY_URL);
   sessionStore.setRelayClient(relayClient);
-  void relayClient.connect().then(() => {
-    relayClient.startKeepalive();
-    console.log(`[mcp-server] Relay pre-connected for session ${sessionId.slice(0, 8)}`);
-  }).catch((err: unknown) => {
-    console.warn(`[mcp-server] Relay pre-connect failed for session ${sessionId.slice(0, 8)}: ${String(err)}`);
-  });
+  fillWarmPool(); // Replenish the pool for the next session
+  if (!relayClient.isConnected) {
+    // Fresh client — connect in background; channel.ts will await connect()
+    void relayClient.connect().then(() => {
+      relayClient.startKeepalive();
+      console.log(`[mcp-server] Fallback relay connected for session ${sessionId.slice(0, 8)}`);
+    }).catch((err: unknown) => {
+      console.warn(`[mcp-server] Fallback relay connect failed: ${String(err)}`);
+    });
+  }
 
   // Connect MCP server to transport (non-blocking; request handled below).
   void mcpServer.connect(transport);
