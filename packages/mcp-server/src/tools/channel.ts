@@ -37,8 +37,22 @@ export function registerJoinChannel(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     paramsShape as any,
     async (args: Record<string, unknown>) => {
-      const channel = args["channel"] as string;
+      const channel = args["channel"] as string | undefined;
       const token = args["token"] as string | undefined;
+
+      if (!channel) {
+        return {
+          isError: true as const,
+          content: [
+            {
+              type: "text" as const,
+              text:
+                "channel is required in hosted/relay mode. " +
+                "Pass the 8-character channel ID shown in the Figma plugin UI.",
+            },
+          ],
+        };
+      }
 
       // Re-use the pre-connected relay client, or create a new one if missing.
       const relayClient = sessionStore.relayClient ?? new RelayClient(RELAY_URL);

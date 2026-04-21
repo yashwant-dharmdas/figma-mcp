@@ -7,6 +7,6 @@
   "editorType": ["figma", "dev"],
   "networkAccess": {
     "allowedDomains": ["*"],
-    "reasoning": "WebSocket connection to configurable relay server"
+    "reasoning": "WebSocket connection to local figma-mcp server (ws://localhost:3001)"
   }
 }

@@ -12,7 +12,10 @@
     "test:watch": "bun run --filter '*' test:watch",
     "relay": "bun run --cwd packages/relay dev",
     "mcp-server": "bun run --cwd packages/mcp-server dev",
-    "dev": "bun run relay & bun run mcp-server"
+    "dev": "bun run relay & bun run mcp-server",
+    "figma-mcp": "bun run --cwd packages/figma-mcp start",
+    "figma-mcp:dev": "bun run --cwd packages/figma-mcp dev",
+    "figma-mcp:build": "bun run --cwd packages/figma-mcp build"
   },
   "devDependencies": {
     "typescript": "^5.9.0",

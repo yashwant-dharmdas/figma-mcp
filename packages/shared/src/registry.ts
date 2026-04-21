@@ -112,23 +112,22 @@ export const COMMAND_REGISTRY: CommandDefinition<any, any>[] = [
   defineCommand({
     name: "join_channel",
     description:
-      "Connect to a specific Figma session via its channel ID. " +
-      "MUST be called before any other command. " +
-      "The channel ID is shown in the Figma plugin UI after opening it. " +
-      "Copy the 8-character code and pass it here.",
+      "Connect to the Figma plugin. Call this before using other Figma tools to confirm the plugin is ready. " +
+      "In local mode (npx figma-mcp): the plugin connects automatically — no channel ID needed. " +
+      "In hosted/relay mode: pass the 8-character channel ID shown in the Figma plugin UI.",
     category: "channel",
     params: z.object({
-      channel: z.string().min(1).describe("8-character channel ID shown in the Figma plugin (e.g. 'abc12345')"),
-      token: z.string().optional().describe("Auth token (auto-provided when server generates the channel)"),
+      channel: z.string().optional().describe("Channel ID (only required in hosted/relay mode — omit for local npx mode)"),
+      token: z.string().optional().describe("Auth token (hosted mode only)"),
     }),
     result: z.object({
-      channel: z.string(),
       status: z.literal("connected"),
     }),
     requiresChannel: false,
     cacheable: false,
     examples: [
-      { description: "Connect to Figma session", input: { channel: "abc12345" } },
+      { description: "Verify plugin connection (local mode)", input: {} },
+      { description: "Connect to hosted session", input: { channel: "abc12345" } },
     ],
   }),
 

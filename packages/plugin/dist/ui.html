@@ -112,6 +112,68 @@
     </div>
   </details>
 
-  <!-- __SCRIPT__ -->
+  <script>
+"use strict";
+(() => {
+  // src/ui.ts
+  var statusEl = document.getElementById("status");
+  var statusTextEl = document.getElementById("status-text");
+  var serverUrlInput = document.getElementById("server-url");
+  var reconnectBtn = document.getElementById("reconnect-btn");
+  function setStatus(text, type) {
+    statusTextEl.textContent = text;
+    statusEl.className = `status status--${type}`;
+  }
+  var ws = null;
+  function connect() {
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      try {
+        ws.close();
+      } catch (e) {
+      }
+      ws = null;
+    }
+    const url = serverUrlInput.value.trim() || "ws://localhost:3001";
+    setStatus("Connecting\u2026", "connecting");
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      setStatus("Connected to figma-mcp", "connected");
+    };
+    ws.onmessage = (event) => {
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {
+        return;
+      }
+      if (msg["type"] === "connected") return;
+      if (msg["command"]) {
+        parent.postMessage({ pluginMessage: msg }, "*");
+      }
+    };
+    ws.onerror = () => {
+      setStatus("Cannot connect \u2014 is figma-mcp running?", "error");
+    };
+    ws.onclose = (event) => {
+      if (event.wasClean) {
+        setStatus("Disconnected", "disconnected");
+      } else {
+        setStatus("Connection lost \u2014 click Reconnect", "error");
+      }
+    };
+  }
+  window.onmessage = (event) => {
+    const { pluginMessage } = event.data;
+    if (!pluginMessage) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify(pluginMessage));
+  };
+  reconnectBtn.addEventListener("click", () => connect());
+  connect();
+})();
+
+</script>
 </body>
 </html>
