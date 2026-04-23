@@ -1,10 +1,6 @@
 // src/index.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { createServer } from "http";
-import { randomUUID as randomUUID2 } from "crypto";
 
 // shared-src/protocol/errors.ts
 var FigmaMcpError = class extends Error {
@@ -1474,14 +1470,14 @@ var SessionStore = class {
 
 // src/tools/channel.ts
 import { z as z2 } from "zod";
-function registerJoinChannel(server, sessionStore) {
+function registerJoinChannel(server, sessionStore2) {
   server.tool(
     "join_channel",
     "Verify the Figma plugin is connected. Open the Figma plugin in Figma Desktop and it connects automatically to this server. Call this tool before using other Figma tools to confirm the plugin is ready.",
     // No params required — the plugin auto-connects
     { channel: z2.string().optional().describe("Not used in local mode. Ignored if provided.") },
     async (_args) => {
-      if (!sessionStore.isConnected) {
+      if (!sessionStore2.isConnected) {
         return {
           isError: true,
           content: [
@@ -1506,9 +1502,9 @@ function registerJoinChannel(server, sessionStore) {
 
 // src/tool-factory.ts
 var ToolFactory = class {
-  constructor(server, sessionStore) {
+  constructor(server, sessionStore2) {
     this.server = server;
-    this.sessionStore = sessionStore;
+    this.sessionStore = sessionStore2;
   }
   server;
   sessionStore;
@@ -1584,8 +1580,6 @@ var ToolFactory = class {
 
 // src/index.ts
 var PLUGIN_WS_PORT = Number(process.env["FIGMA_MCP_PORT"] ?? 3001);
-var HTTP_PORT = Number(process.env["FIGMA_MCP_HTTP_PORT"] ?? 3002);
-var HTTP_ONLY_MODE = process.argv.includes("--http") || process.env["FIGMA_MCP_HTTP"] === "1";
 var bridge = new PluginBridge(PLUGIN_WS_PORT);
 process.stderr.write(
   `[figma-mcp] Plugin WebSocket server on ws://localhost:${PLUGIN_WS_PORT}
@@ -1595,123 +1589,14 @@ process.stderr.write(
   `[figma-mcp] Open the Figma plugin \u2014 it will connect automatically
 `
 );
-function createMcpServer() {
-  const sessionStore = new SessionStore(bridge);
-  const server = new McpServer({ name: "figma-mcp", version: "3.0.3" });
-  const factory = new ToolFactory(server, sessionStore);
-  factory.registerAll(COMMAND_REGISTRY);
-  return server;
-}
-function startHttpServer(port, sessions) {
-  const httpServer = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://localhost`);
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Mcp-Session-Id, MCP-Protocol-Version"
-    );
-    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-    if (url.pathname === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        status: "ok",
-        pluginConnected: bridge.isConnected,
-        sessions: sessions.size,
-        uptime: Math.round(process.uptime())
-      }));
-      return;
-    }
-    if (url.pathname === "/mcp") {
-      const sessionId = req.headers["mcp-session-id"];
-      if (sessionId && sessions.has(sessionId)) {
-        await sessions.get(sessionId).handleRequest(req, res);
-        return;
-      }
-      const body = await new Promise((resolve) => {
-        const chunks = [];
-        req.on("data", (c) => chunks.push(c));
-        req.on("end", () => resolve(Buffer.concat(chunks)));
-      });
-      let parsed;
-      try {
-        parsed = JSON.parse(body.toString());
-      } catch {
-        parsed = null;
-      }
-      if (!isInitializeRequest(parsed)) {
-        res.writeHead(400);
-        res.end("Expected initialize request");
-        return;
-      }
-      const newId = randomUUID2();
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => newId,
-        onsessioninitialized: (sid) => {
-          sessions.set(sid, transport);
-          process.stderr.write(`[figma-mcp] HTTP session opened: ${sid.slice(0, 8)}
+var sessionStore = new SessionStore(bridge);
+var mcpServer = new McpServer({ name: "figma-mcp", version: "3.0.4" });
+var factory = new ToolFactory(mcpServer, sessionStore);
+factory.registerAll(COMMAND_REGISTRY);
+var transport = new StdioServerTransport();
+await mcpServer.connect(transport);
+process.stderr.write(`[figma-mcp] stdio mode \u2014 ready
 `);
-        }
-      });
-      transport.onclose = () => {
-        sessions.delete(newId);
-        process.stderr.write(`[figma-mcp] HTTP session closed: ${newId.slice(0, 8)}
-`);
-      };
-      const mcpServer = createMcpServer();
-      await mcpServer.connect(transport);
-      await transport.handleRequest(Object.assign(req, { _body: body }), res, parsed);
-      return;
-    }
-    res.writeHead(404);
-    res.end("Not found");
-  });
-  httpServer.listen(port, "127.0.0.1", () => {
-    process.stderr.write(
-      `[figma-mcp] HTTP MCP server on http://localhost:${port}/mcp
-`
-    );
-    process.stderr.write(
-      `[figma-mcp] Health:           http://localhost:${port}/health
-`
-    );
-    process.stderr.write(
-      `[figma-mcp] Claude Code .mcp.json entry:
-[figma-mcp]   { "mcpServers": { "figma": { "url": "http://localhost:${port}/mcp" } } }
-`
-    );
-  });
-  httpServer.on("error", (err) => {
-    if (err.code === "EADDRINUSE") {
-      process.stderr.write(
-        `[figma-mcp] Port ${port} already in use \u2014 HTTP sidecar skipped
-`
-      );
-    } else {
-      process.stderr.write(`[figma-mcp] HTTP server error: ${err.message}
-`);
-    }
-  });
-}
-if (HTTP_ONLY_MODE) {
-  const sessions = /* @__PURE__ */ new Map();
-  startHttpServer(HTTP_PORT, sessions);
-  process.stderr.write(`[figma-mcp] HTTP-only mode \u2014 no stdio transport
-`);
-} else {
-  const mcpServer = createMcpServer();
-  const transport = new StdioServerTransport();
-  await mcpServer.connect(transport);
-  process.stderr.write(`[figma-mcp] stdio mode \u2014 ready
-`);
-  const sessions = /* @__PURE__ */ new Map();
-  startHttpServer(HTTP_PORT, sessions);
-}
 process.on("SIGINT", () => {
   bridge.close();
   process.exit(0);
