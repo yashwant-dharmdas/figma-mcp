@@ -1,6 +1,6 @@
 {
   "name": "@yashwant.dharmdas/figma-mcp",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "Run Figma MCP locally via npx — connects Claude Desktop directly to your Figma plugin",
   "type": "module",
   "bin": {

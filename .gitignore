@@ -44,3 +44,6 @@ coverage/
 # Figma plugin dist is intentionally committed — Figma loads it
 # directly from the filesystem, no build step needed for end users.
 !packages/plugin/dist/
+
+# figma-mcp npm package dist is intentionally committed — npx needs it.
+!packages/figma-mcp/dist/
