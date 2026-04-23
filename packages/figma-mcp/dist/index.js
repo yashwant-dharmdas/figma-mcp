@@ -1584,8 +1584,8 @@ var ToolFactory = class {
 
 // src/index.ts
 var PLUGIN_WS_PORT = Number(process.env["FIGMA_MCP_PORT"] ?? 3001);
-var HTTP_PORT = Number(process.env["FIGMA_MCP_HTTP_PORT"] ?? 3001);
-var HTTP_MODE = process.argv.includes("--http") || process.env["FIGMA_MCP_HTTP"] === "1";
+var HTTP_PORT = Number(process.env["FIGMA_MCP_HTTP_PORT"] ?? 3002);
+var HTTP_ONLY_MODE = process.argv.includes("--http") || process.env["FIGMA_MCP_HTTP"] === "1";
 var bridge = new PluginBridge(PLUGIN_WS_PORT);
 process.stderr.write(
   `[figma-mcp] Plugin WebSocket server on ws://localhost:${PLUGIN_WS_PORT}
@@ -1597,13 +1597,12 @@ process.stderr.write(
 );
 function createMcpServer() {
   const sessionStore = new SessionStore(bridge);
-  const server = new McpServer({ name: "figma-mcp", version: "3.0.1" });
+  const server = new McpServer({ name: "figma-mcp", version: "3.0.3" });
   const factory = new ToolFactory(server, sessionStore);
   factory.registerAll(COMMAND_REGISTRY);
   return server;
 }
-if (HTTP_MODE) {
-  const sessions = /* @__PURE__ */ new Map();
+function startHttpServer(port, sessions) {
   const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost`);
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1631,8 +1630,7 @@ if (HTTP_MODE) {
     if (url.pathname === "/mcp") {
       const sessionId = req.headers["mcp-session-id"];
       if (sessionId && sessions.has(sessionId)) {
-        const transport2 = sessions.get(sessionId);
-        await transport2.handleRequest(req, res);
+        await sessions.get(sessionId).handleRequest(req, res);
         return;
       }
       const body = await new Promise((resolve) => {
@@ -1667,34 +1665,52 @@ if (HTTP_MODE) {
       };
       const mcpServer = createMcpServer();
       await mcpServer.connect(transport);
-      const fakeReq = Object.assign(req, { _body: body });
-      await transport.handleRequest(fakeReq, res, parsed);
+      await transport.handleRequest(Object.assign(req, { _body: body }), res, parsed);
       return;
     }
     res.writeHead(404);
     res.end("Not found");
   });
-  httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
+  httpServer.listen(port, "127.0.0.1", () => {
     process.stderr.write(
-      `[figma-mcp] HTTP mode \u2014 MCP endpoint: http://localhost:${HTTP_PORT}/mcp
+      `[figma-mcp] HTTP MCP server on http://localhost:${port}/mcp
 `
     );
     process.stderr.write(
-      `[figma-mcp] Health:                   http://localhost:${HTTP_PORT}/health
+      `[figma-mcp] Health:           http://localhost:${port}/health
 `
     );
     process.stderr.write(
-      `[figma-mcp] Claude Code .mcp.json:
-[figma-mcp]   { "mcpServers": { "figma": { "url": "http://localhost:${HTTP_PORT}/mcp" } } }
+      `[figma-mcp] Claude Code .mcp.json entry:
+[figma-mcp]   { "mcpServers": { "figma": { "url": "http://localhost:${port}/mcp" } } }
 `
     );
   });
+  httpServer.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      process.stderr.write(
+        `[figma-mcp] Port ${port} already in use \u2014 HTTP sidecar skipped
+`
+      );
+    } else {
+      process.stderr.write(`[figma-mcp] HTTP server error: ${err.message}
+`);
+    }
+  });
+}
+if (HTTP_ONLY_MODE) {
+  const sessions = /* @__PURE__ */ new Map();
+  startHttpServer(HTTP_PORT, sessions);
+  process.stderr.write(`[figma-mcp] HTTP-only mode \u2014 no stdio transport
+`);
 } else {
   const mcpServer = createMcpServer();
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
   process.stderr.write(`[figma-mcp] stdio mode \u2014 ready
 `);
+  const sessions = /* @__PURE__ */ new Map();
+  startHttpServer(HTTP_PORT, sessions);
 }
 process.on("SIGINT", () => {
   bridge.close();
