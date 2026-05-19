@@ -1223,6 +1223,101 @@ var COMMAND_REGISTRY = [
     requiresChannel: true,
     cacheable: false
   }),
+  // ═════════════════════════════════════════════════════════════════════════
+  // ── v3.1.0 — Complete design extraction (for Figma → code pipelines) ─────
+  // ═════════════════════════════════════════════════════════════════════════
+  defineCommand({
+    name: "get_design_spec",
+    description: "Get a COMPLETE recursive design spec of a node \u2014 every property needed for pixel-perfect replication in code (Elementor, React, HTML/CSS, etc.). This is THE primary command for Figma \u2192 code workflows. Returns the full nested tree with: geometry, rotation, fills, strokes (with per-side widths + alignment + dash), all 4 corner radii separately, effects (shadows + blurs), full typography (fontWeight, letterSpacing, lineHeight, textCase, textDecoration, paragraph spacing), complete auto-layout (sizing modes, alignment both axes, wrap, gap both axes), layout positioning (align/grow/sizing/positioning), min/max dimensions, mask info, bound variables, component metadata, and hyperlinks. Replaces N+1 get_node_info round-trips with one call. Use this as the FIRST call in any Figma \u2192 code pipeline.",
+    category: "document",
+    params: z.object({
+      nodeId: NodeIdSchema,
+      maxDepth: z.number().int().min(1).max(100).default(50).describe("Maximum recursion depth (default 50 \u2014 enough for any real-world design)"),
+      includeHidden: z.boolean().default(false).describe("Include nodes with visible=false (default false \u2014 skip hidden)")
+    }),
+    result: z.object({
+      tree: z.unknown(),
+      summary: z.object({
+        rootId: z.string(),
+        rootName: z.string(),
+        rootType: z.string(),
+        nodeCount: z.number(),
+        textCount: z.number(),
+        imageCount: z.number(),
+        maxDepth: z.number()
+      })
+    }),
+    requiresChannel: true,
+    cacheable: true,
+    cacheTtlMs: 3e3,
+    examples: [
+      { description: "Extract complete spec of a hero section frame", input: { nodeId: "1:234" } },
+      { description: "Shallow extraction (3 levels deep, include hidden)", input: { nodeId: "1:234", maxDepth: 3, includeHidden: true } }
+    ]
+  }),
+  // ── REMOVED in v3.3.0 ─────────────────────────────────────────────────────
+  // `export_all_image_fills` was removed because Figma's exportAsync renders
+  // the node WITH overlays, text, and effects baked into the pixels. The
+  // resulting images can't be reused cleanly in the target site (e.g.
+  // hero exports would include the overlay tint + headline text).
+  //
+  // New workflow: the designer or developer uploads CLEAN source images to
+  // the WordPress media library directly (WP Admin → Media → Add New). Then
+  // call the Elementor MCP's `list-media-library` tool and fuzzy-match Figma
+  // layer names to WP filenames.
+  //
+  // If you still need to export a node as an image (e.g. for an SVG icon),
+  // use `export_node_as_image` on that specific leaf node.
+  defineCommand({
+    name: "get_node_css",
+    description: "Get the CSS object that Figma itself would output for a node (wraps node.getCSSAsync). Use as a sanity check against what your code-generation pipeline produces. Returns: { nodeId, nodeName, nodeType, css: { property: value, ... } }. CSS values are already in browser-ready format (px, rgba, hex).",
+    category: "document",
+    params: z.object({
+      nodeId: NodeIdSchema
+    }),
+    result: z.object({
+      nodeId: z.string(),
+      nodeName: z.string(),
+      nodeType: z.string(),
+      css: z.record(z.string(), z.string())
+    }),
+    requiresChannel: true,
+    cacheable: true,
+    cacheTtlMs: 3e3,
+    examples: [
+      { description: "Get the CSS Figma would emit for a button", input: { nodeId: "1:42" } }
+    ]
+  }),
+  defineCommand({
+    name: "get_variable_collections_resolved",
+    description: "Get all Figma Variables (design tokens) WITH their actual resolved values per mode \u2014 including color hex, semantic slug, scopes, codeSyntax, and aliases. Unlike get_variables (which returns only IDs and types), this returns everything needed to map Figma tokens to a code design system (Elementor globals, Tailwind config, CSS vars). Each variable gets a semanticSlug derived from its name (e.g. 'Brand/Primary' \u2192 'brand-primary') for direct mapping.",
+    category: "variable",
+    params: z.object({}),
+    result: z.object({
+      collections: z.array(z.object({
+        id: z.string(),
+        name: z.string(),
+        defaultModeId: z.string(),
+        modes: z.array(z.object({ modeId: z.string(), name: z.string() })),
+        variables: z.array(z.object({
+          id: z.string(),
+          name: z.string(),
+          semanticSlug: z.string(),
+          resolvedType: z.enum(["COLOR", "FLOAT", "STRING", "BOOLEAN"]),
+          description: z.string(),
+          scopes: z.array(z.string()),
+          codeSyntax: z.record(z.string(), z.string()),
+          valuesByMode: z.record(z.string(), z.unknown())
+        }))
+      }))
+    }),
+    requiresChannel: true,
+    cacheable: true,
+    cacheTtlMs: 1e4,
+    examples: [
+      { description: "Get all variables with hex values + semantic slugs for code mapping", input: {} }
+    ]
+  }),
   // ── Batch ─────────────────────────────────────────────────
   defineCommand({
     name: "batch_execute",
@@ -1578,6 +1673,249 @@ var ToolFactory = class {
   }
 };
 
+// src/tools/figma-rest.ts
+import { z as z3 } from "zod";
+var FIGMA_API = "https://api.figma.com/v1";
+function parseFigmaUrl(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error(`Not a valid URL: ${url}`);
+  }
+  const m = u.pathname.match(/\/(design|file|proto|board)\/([A-Za-z0-9_-]+)/);
+  if (!m) {
+    throw new Error(
+      `Could not extract a Figma file key from URL: ${url}
+Expected format: https://www.figma.com/design/<fileKey>/...`
+    );
+  }
+  const fileKey = m[2];
+  const rawNodeId = u.searchParams.get("node-id");
+  const nodeId = rawNodeId ? rawNodeId.replace(/-/g, ":") : null;
+  return { fileKey, nodeId };
+}
+function requireToken() {
+  const token = process.env["FIGMA_TOKEN"] ?? process.env["FIGMA_PERSONAL_ACCESS_TOKEN"] ?? "";
+  if (!token) {
+    throw new Error(
+      'FIGMA_TOKEN is not set.\n1. Go to https://www.figma.com/settings \u2192 Personal access tokens \u2192 Create new token\n2. Add it to claude_desktop_config.json under the figma server:\n   "env": { "FIGMA_TOKEN": "figd_your_token_here" }\n3. Restart Claude Desktop'
+    );
+  }
+  return token;
+}
+function rgba(c) {
+  const r = Math.round(c.r * 255);
+  const g = Math.round(c.g * 255);
+  const b = Math.round(c.b * 255);
+  const a = Math.round((c.a ?? 1) * 100) / 100;
+  const hex = "#" + r.toString(16).padStart(2, "0") + g.toString(16).padStart(2, "0") + b.toString(16).padStart(2, "0");
+  return { hex, rgba: `rgba(${r},${g},${b},${a})` };
+}
+function summarizeFills(fills) {
+  return fills.filter((f) => !!f && typeof f === "object" && f["visible"] !== false).map((f) => {
+    if (f["type"] === "SOLID" && f["color"]) {
+      return { type: "solid", ...rgba(f["color"]), opacity: f["opacity"] ?? 1 };
+    }
+    if (f["type"] === "GRADIENT_LINEAR" || f["type"] === "GRADIENT_RADIAL") {
+      const stops = (f["gradientStops"] ?? []).map((s) => ({
+        position: Math.round(s["position"] * 100) + "%",
+        ...rgba(s["color"])
+      }));
+      return { type: f["type"], stops };
+    }
+    return { type: f["type"] };
+  });
+}
+function summarizeNode(node, depth = 0, maxDepth = 4) {
+  if (!node || depth > maxDepth) return null;
+  const out = {
+    id: node["id"],
+    name: node["name"],
+    type: node["type"]
+  };
+  const bb = node["absoluteBoundingBox"];
+  if (bb) {
+    out["bounds"] = {
+      x: Math.round(bb.x),
+      y: Math.round(bb.y),
+      width: Math.round(bb.width),
+      height: Math.round(bb.height)
+    };
+  }
+  if (node["visible"] === false) out["visible"] = false;
+  if (typeof node["opacity"] === "number" && node["opacity"] !== 1) out["opacity"] = node["opacity"];
+  const fills = node["fills"];
+  if (Array.isArray(fills) && fills.length > 0) {
+    const sf = summarizeFills(fills);
+    if (sf.length > 0) out["fills"] = sf;
+  }
+  const strokes = node["strokes"];
+  if (Array.isArray(strokes) && strokes.length > 0) {
+    const ss = summarizeFills(strokes);
+    if (ss.length > 0) {
+      out["strokes"] = ss;
+      out["strokeWeight"] = node["strokeWeight"];
+      out["strokeAlign"] = node["strokeAlign"];
+    }
+  }
+  if (typeof node["cornerRadius"] === "number") out["cornerRadius"] = node["cornerRadius"];
+  if (node["type"] === "TEXT") {
+    out["text"] = node["characters"];
+    const s = node["style"];
+    if (s) {
+      out["typography"] = {
+        fontFamily: s["fontFamily"],
+        fontSize: s["fontSize"],
+        fontWeight: s["fontWeight"],
+        lineHeightPx: s["lineHeightPx"],
+        letterSpacing: s["letterSpacing"],
+        textAlignHorizontal: s["textAlignHorizontal"],
+        textAlignVertical: s["textAlignVertical"],
+        textDecoration: s["textDecoration"],
+        textCase: s["textCase"]
+      };
+    }
+  }
+  if (node["layoutMode"]) {
+    out["autoLayout"] = {
+      direction: node["layoutMode"],
+      itemSpacing: node["itemSpacing"],
+      paddingTop: node["paddingTop"],
+      paddingRight: node["paddingRight"],
+      paddingBottom: node["paddingBottom"],
+      paddingLeft: node["paddingLeft"],
+      primaryAxisSizing: node["primaryAxisSizingMode"],
+      counterAxisSizing: node["counterAxisSizingMode"],
+      primaryAxisAlign: node["primaryAxisAlignItems"],
+      counterAxisAlign: node["counterAxisAlignItems"],
+      layoutWrap: node["layoutWrap"]
+    };
+  }
+  const effects = node["effects"];
+  if (Array.isArray(effects) && effects.length > 0) {
+    out["effects"] = effects.filter((e) => !!e["visible"]).map((e) => {
+      const base = { type: e["type"], radius: e["radius"] };
+      if (e["color"]) base["color"] = rgba(e["color"]);
+      if (e["offset"]) base["offset"] = e["offset"];
+      return base;
+    });
+  }
+  if (node["type"] === "RECTANGLE" || node["type"] === "FRAME") {
+    const imageFill = node["fills"]?.find(
+      (f) => f["type"] === "IMAGE"
+    );
+    if (imageFill) out["hasImageFill"] = true;
+  }
+  const children = node["children"];
+  if (Array.isArray(children) && children.length > 0 && depth < maxDepth) {
+    out["children"] = children.map((c) => summarizeNode(c, depth + 1, maxDepth)).filter(Boolean);
+  } else if (Array.isArray(children)) {
+    out["childCount"] = children.length;
+  }
+  return out;
+}
+function registerFetchFigmaDesign(server) {
+  server.tool(
+    "fetch_figma_design",
+    "Fetch design data from any Figma URL using the Figma REST API \u2014 no Figma Desktop needed. Returns node hierarchy, layout, colors, typography, effects, and auto-layout data. Requires FIGMA_TOKEN env var (personal access token from figma.com/settings). Use this when you have a Figma URL and want to read the design without opening Figma Desktop.",
+    {
+      url: z3.string().describe(
+        "Figma file or node URL. Examples:\n  https://www.figma.com/design/ABC123/MyFile\n  https://www.figma.com/design/ABC123/MyFile?node-id=0-1"
+      ),
+      depth: z3.number().int().min(1).max(6).optional().describe("Child traversal depth (1\u20136, default 4). Use 2\u20133 for a quick overview, 5\u20136 for full detail.")
+    },
+    async ({ url, depth = 4 }) => {
+      try {
+        const token = requireToken();
+        const { fileKey, nodeId } = parseFigmaUrl(url);
+        if (nodeId) {
+          const apiUrl = `${FIGMA_API}/files/${fileKey}/nodes?ids=${encodeURIComponent(nodeId)}&geometry=paths`;
+          const res = await fetch(apiUrl, {
+            headers: { "X-Figma-Token": token }
+          });
+          if (!res.ok) {
+            const body = await res.text();
+            if (res.status === 403) {
+              throw new Error(
+                `Figma API returned 403 Forbidden. Check that:
+  1. Your FIGMA_TOKEN is valid (get from figma.com/settings)
+  2. You have access to this file: ${fileKey}`
+              );
+            }
+            throw new Error(`Figma API error ${res.status}: ${body}`);
+          }
+          const data = await res.json();
+          const rawNodes = data["nodes"];
+          const nodes = Object.values(rawNodes).map(
+            (n) => summarizeNode(n.document, 0, depth)
+          );
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                fileKey,
+                nodeId,
+                nodes,
+                styles: data["styles"] ?? {}
+              }, null, 2)
+            }]
+          };
+        } else {
+          const apiUrl = `${FIGMA_API}/files/${fileKey}?depth=2`;
+          const res = await fetch(apiUrl, {
+            headers: { "X-Figma-Token": token }
+          });
+          if (!res.ok) {
+            const body = await res.text();
+            if (res.status === 403) {
+              throw new Error(
+                `Figma API returned 403 Forbidden. Check that:
+  1. Your FIGMA_TOKEN is valid (get from figma.com/settings)
+  2. You have access to this file: ${fileKey}`
+              );
+            }
+            throw new Error(`Figma API error ${res.status}: ${body}`);
+          }
+          const data = await res.json();
+          const doc = data["document"];
+          const pages = doc["children"] ?? [];
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                fileKey,
+                fileName: data["name"],
+                lastModified: data["lastModified"],
+                version: data["version"],
+                pages: pages.map((p) => ({
+                  id: p["id"],
+                  name: p["name"],
+                  topLevelFrames: (p["children"] ?? []).slice(0, 30).map((c) => ({
+                    id: c["id"],
+                    name: c["name"],
+                    type: c["type"],
+                    bounds: c["absoluteBoundingBox"]
+                  }))
+                })),
+                hint: "To read a specific frame: call fetch_figma_design with the URL and ?node-id=<id>"
+              }, null, 2)
+            }]
+          };
+        }
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: err instanceof Error ? err.message : String(err)
+          }]
+        };
+      }
+    }
+  );
+}
+
 // src/index.ts
 var PLUGIN_WS_PORT = Number(process.env["FIGMA_MCP_PORT"] ?? 3001);
 var bridge = new PluginBridge(PLUGIN_WS_PORT);
@@ -1590,9 +1928,10 @@ process.stderr.write(
 `
 );
 var sessionStore = new SessionStore(bridge);
-var mcpServer = new McpServer({ name: "figma-mcp", version: "3.0.4" });
+var mcpServer = new McpServer({ name: "figma-mcp", version: "3.3.0" });
 var factory = new ToolFactory(mcpServer, sessionStore);
 factory.registerAll(COMMAND_REGISTRY);
+registerFetchFigmaDesign(mcpServer);
 var transport = new StdioServerTransport();
 await mcpServer.connect(transport);
 process.stderr.write(`[figma-mcp] stdio mode \u2014 ready

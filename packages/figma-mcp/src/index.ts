@@ -21,6 +21,7 @@ import { COMMAND_REGISTRY } from "@figma-mcp/shared";
 import { PluginBridge } from "./plugin-bridge.js";
 import { SessionStore } from "./session-store.js";
 import { ToolFactory } from "./tool-factory.js";
+import { registerFetchFigmaDesign } from "./tools/figma-rest.js";
 
 const PLUGIN_WS_PORT = Number(process.env["FIGMA_MCP_PORT"] ?? 3001);
 
@@ -38,9 +39,10 @@ process.stderr.write(
 // ── Start the MCP server (stdio transport) ───────────────────
 
 const sessionStore = new SessionStore(bridge);
-const mcpServer    = new McpServer({ name: "figma-mcp", version: "3.0.4" });
+const mcpServer    = new McpServer({ name: "figma-mcp", version: "3.3.0" });
 const factory      = new ToolFactory(mcpServer, sessionStore);
 factory.registerAll(COMMAND_REGISTRY);
+registerFetchFigmaDesign(mcpServer);   // REST API — no plugin needed
 
 const transport = new StdioServerTransport();
 await mcpServer.connect(transport);
